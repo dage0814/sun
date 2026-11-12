@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import csv
+from collections.abc import Sized
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence
@@ -45,6 +46,8 @@ class TwoStageTrainer:
             return []
         if self.model.text_encoder is None:
             raise RuntimeError("Stage 1 requires a text encoder")
+        if self.training.stage1_epochs and isinstance(loader, Sized) and len(loader) == 0:
+            raise ValueError("Stage 1 loader contains no batches")
         optimizer = torch.optim.AdamW(
             self.model.text_encoder.parameters(),
             lr=self.training.stage1_lr,
@@ -72,7 +75,9 @@ class TwoStageTrainer:
                 optimizer.step()
                 total += float(loss.detach())
                 count += 1
-            history.append(total / max(count, 1))
+            if count == 0:
+                raise ValueError("Stage 1 loader contains no batches")
+            history.append(total / count)
         return history
 
     def fit_stage2(
@@ -80,6 +85,10 @@ class TwoStageTrainer:
         train_loader: Iterable[Mapping[str, torch.Tensor]],
         validation_loader: Optional[Iterable[Mapping[str, torch.Tensor]]] = None,
     ) -> TrainingHistory:
+        if isinstance(train_loader, Sized) and len(train_loader) == 0:
+            raise ValueError("Stage 2 training loader contains no batches")
+        if isinstance(validation_loader, Sized) and len(validation_loader) == 0:
+            raise ValueError("Validation loader contains no batches")
         optimizer = self._stage2_optimizer()
         history = TrainingHistory()
         best_state = None
@@ -100,7 +109,7 @@ class TwoStageTrainer:
                         encoded.features, targets, self.training.mixup_alpha,
                         return_permutation=True,
                     )
-                    # Mixup uses the earlier donor cutoff at each step.
+
                     mixed_cutoffs = None if window_cutoffs is None else torch.minimum(
                         window_cutoffs, window_cutoffs[permutation]
                     )
@@ -116,7 +125,9 @@ class TwoStageTrainer:
                 optimizer.step()
                 total += float(objective.total.detach())
                 count += 1
-            history.train_loss.append(total / max(count, 1))
+            if count == 0:
+                raise ValueError("Stage 2 training loader contains no batches")
+            history.train_loss.append(total / count)
 
             if validation_loader is None:
                 continue
@@ -137,6 +148,7 @@ class TwoStageTrainer:
 
     @torch.no_grad()
     def evaluate_mcc(self, loader: Iterable[Mapping[str, torch.Tensor]]) -> float:
+
         self.model.eval()
         predictions, truths = [], []
         for raw_batch in loader:
@@ -145,10 +157,16 @@ class TwoStageTrainer:
             targets = batch.pop("targets")
             batch.pop("industry_relevance", None)
             logits = self.model(**batch).prediction.logits
+            if logits.ndim != 4 or logits.shape[-1] != 2 or targets.shape != logits.shape[:-1]:
+                raise ValueError("Expected binary logits [B,H,N,2] and targets [B,H,N]")
             predictions.append(logits.argmax(dim=-1).reshape(-1))
             truths.append(targets.reshape(-1))
+        if not predictions:
+            raise ValueError("Evaluation loader contains no batches")
         predicted = torch.cat(predictions)
         truth = torch.cat(truths)
+        if predicted.numel() == 0 or predicted.numel() != truth.numel():
+            raise ValueError("Predictions and targets must have the same nonzero size")
         tp = ((predicted == 1) & (truth == 1)).sum().float()
         tn = ((predicted == 0) & (truth == 0)).sum().float()
         fp = ((predicted == 1) & (truth == 0)).sum().float()
@@ -167,7 +185,7 @@ class TwoStageTrainer:
         method: str,
         stock_symbols: Optional[Sequence[str]] = None,
     ) -> int:
-        """Export date, horizon and stock predictions; missing dates or symbols use sequential indices."""
+
 
         self.model.eval()
         output_path = Path(output_path)
@@ -198,7 +216,11 @@ class TwoStageTrainer:
                 targets = batch.pop("targets")
                 batch.pop("industry_relevance", None)
                 logits = self.model(**batch).prediction.logits
+                if logits.ndim != 4 or logits.shape[-1] != 2 or targets.shape != logits.shape[:-1]:
+                    raise ValueError("Expected binary logits [B,H,N,2] and targets [B,H,N]")
                 probabilities = torch.softmax(logits, dim=-1).detach().cpu()
+                if not torch.isfinite(probabilities).all():
+                    raise ValueError("Cannot export non-finite prediction probabilities")
                 target_values = targets.detach().cpu()
                 predictions = probabilities.argmax(dim=-1)
                 batch_size, horizons, stocks = predictions.shape
@@ -241,6 +263,9 @@ class TwoStageTrainer:
                             )
                             row_count += 1
                 fallback_index += batch_size
+        if row_count == 0:
+            temporary_path.unlink()
+            raise ValueError("Prediction loader contains no observations")
         temporary_path.replace(output_path)
         return row_count
 
@@ -278,8 +303,11 @@ class TwoStageTrainer:
         if values is None:
             return [f"{prefix}{fallback_start + index:06d}" for index in range(batch_size)]
         if torch.is_tensor(values):
-            return values.detach().cpu().reshape(-1).tolist()
-        result = list(values)
+            result = values.detach().cpu().reshape(-1).tolist()
+        elif isinstance(values, (str, bytes)):
+            raise ValueError("Metadata must contain one value per sample, not a scalar string")
+        else:
+            result = list(values)
         if len(result) != batch_size:
             raise ValueError("Metadata batch size does not match prediction batch size")
         return result

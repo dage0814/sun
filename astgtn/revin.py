@@ -7,7 +7,7 @@ from torch import nn
 
 
 class RevIN(nn.Module):
-    """Normalize [B, T, N, F] along T, independently for each sample and stock."""
+
 
     def __init__(self, num_features: int, affine: bool = True, eps: float = 1e-5) -> None:
         super().__init__()

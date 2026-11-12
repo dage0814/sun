@@ -11,7 +11,7 @@ from .history import PointInTimePrior
 
 
 class PriorGraphBuilder:
-    """Descriptive graph only. Historical prediction requires PointInTimePrior with dated source evidence."""
+
 
     @staticmethod
     def from_metadata(
@@ -95,6 +95,8 @@ class DualTopology(nn.Module):
         super().__init__()
         self.config = config
         self.ablation = ablation
+        if prior_adjacency is not None and prior_graph is not None:
+            raise ValueError("Supply either prior_adjacency or prior_graph, not both")
         if prior_adjacency is None:
             prior_adjacency = torch.eye(config.num_stocks)
         prior_adjacency = torch.as_tensor(prior_adjacency, dtype=torch.float)

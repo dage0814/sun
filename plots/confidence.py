@@ -1,6 +1,3 @@
-"""CSV columns: configuration, mean, ci_lower, ci_upper, holm_p.
-Also accepts comparison, delta_mcc, ci_low, ci_high, p_holm from bootstrap.py."""
-
 from __future__ import annotations
 
 import argparse
@@ -47,7 +44,7 @@ def main():
         if not np.isfinite([mean, low, high, p]).all() or not 0 <= p <= 1 or low > high:
             raise ValueError(f"Invalid interval: {row['configuration']}")
         color = blue if p < 0.05 else gray
-        # A bootstrap interval need not contain the point estimate.
+
         ax.hlines(yi, low, high, color=color, linewidth=1.6)
         ax.plot([low, high], [yi, yi], "|", color=color, markersize=7)
         ax.plot(mean, yi, "o", color=color, markersize=6)

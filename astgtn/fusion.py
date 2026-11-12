@@ -11,9 +11,9 @@ from .config import AblationConfig
 
 @dataclass
 class FusionOutput:
-    combined: torch.Tensor  # [B,T,N,D]
-    stock_news: torch.Tensor  # [B,T,N,Dnews]
-    market_cap_weight: torch.Tensor  # [B,T,N]
+    combined: torch.Tensor
+    stock_news: torch.Tensor
+    market_cap_weight: torch.Tensor
     attention: Dict[str, Optional[torch.Tensor]]
 
 
@@ -49,6 +49,10 @@ class MarketCapAdapter(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if industry_features.ndim != 4 or market_caps.ndim != 3:
             raise ValueError("Expected industry_features [B,T,I,D] and market_caps [B,T,N]")
+        if market_caps.shape[:2] != industry_features.shape[:2]:
+            raise ValueError("Market caps and industry features are not aligned")
+        if stock_industry.ndim != 1 or stock_industry.numel() != market_caps.shape[2]:
+            raise ValueError("stock_industry must contain one id per stock")
         stock_industry = stock_industry.to(device=industry_features.device, dtype=torch.long)
         if int(stock_industry.min()) < 0 or int(stock_industry.max()) >= industry_features.shape[2]:
             raise ValueError("stock_industry contains an invalid industry id")
@@ -56,13 +60,18 @@ class MarketCapAdapter(nn.Module):
         if not enabled:
             return stock_news, torch.ones_like(market_caps)
 
-        caps = market_caps.to(industry_features.dtype).clamp_min(1e-8)
+        if not torch.isfinite(market_caps).all() or (market_caps <= 0).any():
+            raise ValueError("Market caps must be finite and strictly positive")
+        caps = market_caps.to(device=industry_features.device, dtype=industry_features.dtype)
         weight = torch.ones_like(caps)
         for industry in torch.unique(stock_industry).tolist():
             member_mask = stock_industry == industry
+
+            if int(member_mask.sum()) == 1:
+                continue
             member_caps = caps[:, :, member_mask]
             other_caps = member_caps.sum(dim=-1, keepdim=True) - member_caps
-            member_weight = other_caps / member_caps
+            member_weight = other_caps / (member_caps + 1e-8)
             if self.normalize_within_industry:
                 member_weight = member_weight / member_weight.mean(dim=-1, keepdim=True).clamp_min(1e-8)
             weight[:, :, member_mask] = member_weight.clamp(max=self.max_weight)
@@ -97,7 +106,7 @@ class DualPathCrossModalFusion(nn.Module):
         self.ca2_norm = nn.LayerNorm(model_dim)
         self.ca3_norm = nn.LayerNorm(model_dim)
         self.baseline_projection = nn.Linear(2 * model_dim, model_dim)
-        # Keep CA3 projection linear to preserve text gradients.
+
         self.output_projection = nn.Sequential(
             nn.Linear(model_dim, model_dim),
             nn.Dropout(dropout),
@@ -112,6 +121,10 @@ class DualPathCrossModalFusion(nn.Module):
     ) -> FusionOutput:
         if quantitative.ndim != 4:
             raise ValueError("quantitative must use shape [B,T,N,Fq]")
+        if market_caps.shape != quantitative.shape[:3]:
+            raise ValueError("market_caps must align with quantitative [B,T,N]")
+        if industry_news.shape[:2] != quantitative.shape[:2]:
+            raise ValueError("News and quantitative batch/time dimensions are not aligned")
         stock_news, cap_weight = self.market_cap_adapter(
             industry_news,
             stock_industry,

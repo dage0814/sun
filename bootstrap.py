@@ -1,7 +1,3 @@
-"""Paired moving-block bootstrap for six MCC comparisons.
-Manifest: JSON list of name, full and baseline CSV paths, relative to the manifest directory.
-Resample whole trading dates; pool observations per seed, then average MCC differences across seeds."""
-
 from __future__ import annotations
 
 import argparse
@@ -20,7 +16,7 @@ RowKey = Tuple[int, str, int, int]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Paired moving-block bootstrap")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--block-length", type=int, default=8)
@@ -30,7 +26,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def add_counts(left: Counts, right: Counts) -> Counts:
-    return tuple(a + b for a, b in zip(left, right))  # type: ignore[return-value]
+    if len(left) != 4 or len(right) != 4:
+        raise ValueError("Confusion counts must contain exactly TP, TN, FP and FN")
+    return (left[0] + right[0], left[1] + right[1],
+            left[2] + right[2], left[3] + right[3])
 
 
 def mcc(counts: Counts) -> float:
@@ -41,14 +40,21 @@ def mcc(counts: Counts) -> float:
 
 def resolve_prediction_paths(specification: object, base: Path | None = None) -> List[Path]:
     patterns = specification if isinstance(specification, list) else [specification]
+    if not patterns:
+        raise ValueError("At least one prediction path is required")
     paths: List[Path] = []
     for pattern in patterns:
+        if not isinstance(pattern, (str, Path)) or not str(pattern).strip():
+            raise ValueError("Prediction paths must be nonempty strings or Path objects")
         if base is not None and not Path(str(pattern)).is_absolute():
             pattern = base / str(pattern)
         matches = [Path(value) for value in glob.glob(str(pattern))]
         if not matches:
             raise FileNotFoundError(f"No prediction files match {pattern!r}")
-        paths.extend(matches)
+        for match in matches:
+            if not match.is_file():
+                raise ValueError(f"Prediction path is not a file: {match}")
+        paths.extend(match.resolve() for match in matches)
     return sorted(set(paths))
 
 
@@ -59,7 +65,12 @@ def load_predictions(
     records: Dict[RowKey, Tuple[int, str, str]] = {}
     for path in resolve_prediction_paths(specification, base):
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            for row in csv.DictReader(handle):
+            reader = csv.DictReader(handle)
+            required = {"seed", "date", "horizon", "stock_index", "y_true", "y_pred"}
+            missing = required.difference(reader.fieldnames or [])
+            if missing:
+                raise ValueError(f"Prediction file {path} is missing columns {sorted(missing)}")
+            for row in reader:
                 row_key = (
                     int(row["seed"]),
                     row["date"],
@@ -69,6 +80,8 @@ def load_predictions(
                 if row_key in records:
                     raise ValueError(f"Duplicate prediction row {row_key} in {path}")
                 seed, date = row_key[:2]
+                if not date.strip() or row_key[2] < 1 or row_key[3] < 0:
+                    raise ValueError(f"Invalid date, horizon or stock index at {row_key} in {path}")
                 truth = int(row["y_true"])
                 prediction = int(row["y_pred"])
                 if truth not in (0, 1) or prediction not in (0, 1):
@@ -191,6 +204,8 @@ def bootstrap_comparison(
 
 
 def holm_adjust(p_values: Sequence[float]) -> List[float]:
+    if any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in p_values):
+        raise ValueError("p-values must be finite and between 0 and 1")
     order = sorted(range(len(p_values)), key=p_values.__getitem__)
     adjusted = [0.0] * len(p_values)
     running = 0.0
@@ -201,23 +216,38 @@ def holm_adjust(p_values: Sequence[float]) -> List[float]:
     return adjusted
 
 
+def resolve_manifest(manifest: object, base: Path) -> List[Tuple[str, List[Path], List[Path]]]:
+    if not isinstance(manifest, list) or len(manifest) != 6:
+        raise ValueError("The primary-test manifest must contain exactly six comparisons")
+    comparisons = []
+    names = set()
+    for item in manifest:
+        if not isinstance(item, dict) or not {"name", "full", "baseline"}.issubset(item):
+            raise ValueError("Each comparison requires name, full and baseline fields")
+        name = item["name"]
+        if not isinstance(name, str) or not name.strip() or name in names:
+            raise ValueError("Comparison names must be nonempty and unique")
+        names.add(name)
+        comparisons.append((name, resolve_prediction_paths(item["full"], base),
+                            resolve_prediction_paths(item["baseline"], base)))
+    return comparisons
+
+
 def main() -> None:
     args = parse_args()
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-    if len(manifest) != 6:
-        raise ValueError("The primary-test manifest must contain exactly six comparisons")
+    comparisons = resolve_manifest(manifest, args.manifest.resolve().parent)
     rng = random.Random(args.seed)
     rows = []
-    for item in manifest:
+    for name, full_paths, baseline_paths in comparisons:
         result = bootstrap_comparison(
-            item["full"],
-            item["baseline"],
+            full_paths,
+            baseline_paths,
             args.block_length,
             args.repetitions,
             rng,
-            base=args.manifest.resolve().parent,
         )
-        rows.append({"comparison": item["name"], **result})
+        rows.append({"comparison": name, **result})
     adjusted = holm_adjust([float(row["p_raw"]) for row in rows])
     for row, value in zip(rows, adjusted):
         row["p_holm"] = value

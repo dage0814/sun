@@ -9,6 +9,72 @@ import torch
 from .history import PointInTimePrior, utc_seconds
 
 
+def _tensor(bundle, key, *, shape=None, ndim=None):
+    value = bundle.get(key)
+    if not isinstance(value, torch.Tensor):
+        raise ValueError(f"{key} must be a tensor")
+    if ndim is not None and value.ndim != ndim:
+        raise ValueError(f"{key} must have {ndim} dimensions, got {value.ndim}")
+    if shape is not None and tuple(value.shape) != tuple(shape):
+        raise ValueError(f"{key} must use shape {shape}, got {tuple(value.shape)}")
+    if value.is_complex() or not torch.isfinite(value).all().item():
+        raise ValueError(f"{key} must contain finite real values")
+    return value
+
+
+def _integer_values(value, name, *, binary=False):
+    if value.is_floating_point() and not torch.equal(value, value.trunc()):
+        raise ValueError(f"{name} must contain integer values")
+    if (value < 0).any().item() or (binary and (value > 1).any().item()):
+        qualifier = "binary 0/1" if binary else "nonnegative integer"
+        raise ValueError(f"{name} must contain {qualifier} values")
+
+
+def _validate_tensor_shapes(bundle, *, use_text):
+    quant = _tensor(bundle, "quantitative", ndim=4)
+    samples, history, stocks, features = quant.shape
+    if min(quant.shape) < 1:
+        raise ValueError("quantitative requires positive [samples,history,stocks,features] dimensions")
+    technical = _tensor(bundle, "technical", ndim=4)
+    if technical.shape[:3] != quant.shape[:3]:
+        raise ValueError("technical and quantitative must share sample/history/stock dimensions")
+    caps = _tensor(bundle, "market_caps", shape=(samples, history, stocks))
+    for key, value in (("quantitative", quant), ("technical", technical), ("market_caps", caps)):
+        if not value.is_floating_point():
+            raise ValueError(f"{key} must be floating-point")
+    if (caps <= 0).any().item():
+        raise ValueError("market_caps must be positive; missing or nonpositive values require preprocessing")
+    labels = _tensor(bundle, "targets", ndim=3)
+    if labels.shape[0] != samples or labels.shape[2] != stocks or labels.shape[1] < 1:
+        raise ValueError("targets must use shape [samples,positive horizon,stocks]")
+    _integer_values(labels, "targets", binary=True)
+    industries = _tensor(bundle, "stock_industry", shape=(stocks,))
+    _integer_values(industries, "stock_industry")
+    num_industries = int(industries.max().item()) + 1
+
+    if use_text:
+        has_ids, has_mask = "input_ids" in bundle, "attention_mask" in bundle
+        if has_ids != has_mask:
+            raise ValueError("input_ids and attention_mask must be supplied together")
+        if has_ids:
+            ids = _tensor(bundle, "input_ids", ndim=4)
+            if ids.shape[:2] != (samples, history) or min(ids.shape[2:]) < 1:
+                raise ValueError("input_ids must use [samples,history,positive news count,positive token count]")
+            _integer_values(ids, "input_ids")
+            mask = _tensor(bundle, "attention_mask", shape=ids.shape)
+            _integer_values(mask, "attention_mask", binary=True)
+            if "news_mask" in bundle:
+                news = _tensor(bundle, "news_mask", shape=ids.shape[:-1])
+                _integer_values(news, "news_mask", binary=True)
+                if (news.bool() & ~mask.bool().any(dim=-1)).any().item():
+                    raise ValueError("news_mask marks a headline valid without any unmasked tokens")
+        elif "news_mask" in bundle:
+            raise ValueError("news_mask requires input_ids and attention_mask")
+        if "industry_relevance" in bundle:
+            _tensor(bundle, "industry_relevance", shape=(samples, history, num_industries))
+    return samples, history, stocks, labels.shape[1]
+
+
 def _time_grid(values, shape, name):
     try:
         if len(shape) == 1:
@@ -25,7 +91,7 @@ def _time_grid(values, shape, name):
 
 
 def validate_temporal_bundle(bundle: Mapping, *, use_prior_graph: bool, use_text: bool):
-    """Check declared time boundaries, not the authenticity of source evidence or feature construction."""
+
     required = {"window_cutoffs", "prediction_cutoffs", "target_times", "stock_symbols"}
     missing = required.difference(bundle)
     if missing:
@@ -35,13 +101,12 @@ def validate_temporal_bundle(bundle: Mapping, *, use_prior_graph: bool, use_text
             "Legacy undated prior_adjacency/concept_membership is rejected. "
             "Rebuild relation_events from dated evidence; do not backdate a recent snapshot."
         )
-    samples, history, stocks, _ = bundle["quantitative"].shape
+    samples, history, stocks, horizons = _validate_tensor_shapes(bundle, use_text=use_text)
     symbols = bundle["stock_symbols"]
     if not isinstance(symbols, list) or len(symbols) != stocks or any(
         not isinstance(symbol, str) or not symbol.strip() for symbol in symbols
     ) or len(set(symbols)) != stocks:
         raise ValueError("stock_symbols must identify each stock once in the tensor/edge node order")
-    horizons = bundle["targets"].shape[1]
     cutoffs = _time_grid(bundle["window_cutoffs"], (samples, history), "window_cutoffs")
     predictions = _time_grid(bundle["prediction_cutoffs"], (samples,), "prediction_cutoffs")
     targets = _time_grid(bundle["target_times"], (samples, horizons), "target_times")

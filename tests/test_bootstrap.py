@@ -1,5 +1,3 @@
-"""Synthetic test fixtures."""
-
 import csv
 import json
 import random

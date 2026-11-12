@@ -51,7 +51,7 @@ class CommandLineSmokeTests(unittest.TestCase):
             "sample_dates": [(datetime(2017, 1, 4) + timedelta(days=index)).date().isoformat() for index in range(samples)],
             "stock_symbols": ["AAA", "BBB", "CCC"],
         }
-        # Synthetic fixture.
+
         origin = datetime(2017, 1, 1, 21, tzinfo=timezone.utc)
         bundle["window_cutoffs"] = [
             [(origin + timedelta(days=i+j)).isoformat() for j in range(history)]

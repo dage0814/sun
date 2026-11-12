@@ -13,9 +13,9 @@ from .config import AblationConfig, TextEncoderConfig
 
 @dataclass
 class TextEncoderOutput:
-    industry_features: torch.Tensor  # [B,T,I,D]
-    industry_scores: torch.Tensor  # [B,T,I]
-    news_attention: torch.Tensor  # [B,T,I,M]
+    industry_features: torch.Tensor
+    industry_scores: torch.Tensor
+    news_attention: torch.Tensor
 
 
 class EmbeddingTextBackbone(nn.Module):
@@ -122,7 +122,7 @@ class FinFEBERTEncoder(nn.Module):
         sentence_features = sentence_features.masked_fill(~flat_news_mask.unsqueeze(-1), 0.0)
 
         if self.ablation.use_bilstm:
-            # Pack valid headlines before the bidirectional LSTM.
+
             order = torch.argsort((~flat_news_mask).long(), dim=1, stable=True)
             gather_index = order.unsqueeze(-1).expand_as(sentence_features)
             packed_input = sentence_features.gather(1, gather_index)
@@ -161,15 +161,13 @@ class FinFEBERTEncoder(nn.Module):
                 device=input_ids.device,
                 dtype=sentence_features.dtype,
             )
-            industry = pooled.unsqueeze(1).expand(-1, self.num_industries, -1)
+            industry = torch.zeros_like(pooled).unsqueeze(1).expand(-1, self.num_industries, -1)
 
         industry = industry + pooled.unsqueeze(1)
         industry = torch.einsum("bid,idf->bif", industry, self.industry_weight)
         industry = F.gelu(industry + self.industry_bias.unsqueeze(0))
         industry = self.dropout(industry)
-        industry = industry.masked_fill(empty_days[:, None, None], 0.0)
         scores = self.score_head(industry).squeeze(-1)
-        scores = scores.masked_fill(empty_days[:, None], 0.0)
         return TextEncoderOutput(
             industry.reshape(batch, steps, self.num_industries, -1),
             scores.reshape(batch, steps, self.num_industries),

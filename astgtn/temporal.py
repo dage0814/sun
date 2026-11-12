@@ -44,7 +44,7 @@ class TransformerTemporalBranch(nn.Module):
             batch_first=True,
             norm_first=False,
         )
-        # Nested-tensor fast path does not support SGFRELU.
+
         self.encoder = nn.TransformerEncoder(
             layer,
             num_layers=config.transformer_layers,

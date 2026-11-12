@@ -1,4 +1,3 @@
-"""Synthetic test fixtures."""
 import copy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone

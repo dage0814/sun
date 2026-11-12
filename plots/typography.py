@@ -52,4 +52,3 @@ def calibrate_print_text(fig, *, pad_inches=0.1, width_mm=150, target_pt=10.5):
               'ordinaryWeight': 'normal', 'mathFont': 'Times New Roman custom'}
     fig._print_typography = result
     return result
-

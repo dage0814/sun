@@ -90,7 +90,8 @@ class ThesisModuleTests(unittest.TestCase):
             }
         )
         processor = NewsWindowPreprocessor(
-            close_time=time(15, 0), open_time=time(9, 30), max_news_per_day=4
+            close_time=time(15, 0), open_time=time(9, 30), max_news_per_day=4,
+            source_timezone="America/New_York",
         )
         windows = processor.transform(
             news, pd.to_datetime(["2024-01-02", "2024-01-03"])
@@ -134,7 +135,7 @@ class ThesisModuleTests(unittest.TestCase):
             industry_feature_dim=8,
             attention_key_dim=4,
         )
-        model_config = self._small_model_config(num_input_features=1)
+        model_config = self._small_model_config(num_input_features=10)
         prior = torch.eye(4)
         model = MultiModalASTGTN(
             model_config=model_config,
@@ -160,10 +161,10 @@ class ThesisModuleTests(unittest.TestCase):
         self.assertEqual(output.prediction.logits.shape, (2, 1, 4, 2))
 
         dataset = MultimodalWindowDataset(
-            batch["quantitative"].repeat(5, 1, 1, 1),
-            batch["technical"].repeat(5, 1, 1, 1),
-            batch["market_caps"].repeat(5, 1, 1),
-            torch.randint(0, 2, (10, 1, 4)),
+            batch["quantitative"].repeat(10, 1, 1, 1),
+            batch["technical"].repeat(10, 1, 1, 1),
+            batch["market_caps"].repeat(10, 1, 1),
+            torch.randint(0, 2, (20, 1, 4)),
         )
         train, validation, test = chronological_split(dataset, gap=1)
         self.assertLess(len(train) + len(validation) + len(test), len(dataset))
@@ -179,7 +180,7 @@ class ThesisModuleTests(unittest.TestCase):
             attention_key_dim=4,
         )
         model = MultiModalASTGTN(
-            model_config=self._small_model_config(num_input_features=1),
+            model_config=self._small_model_config(num_input_features=10),
             text_config=text_config,
             ablation=ablation,
             num_industries=2,
@@ -227,7 +228,7 @@ class ThesisModuleTests(unittest.TestCase):
             with self.subTest(ablation=name):
                 ablation = AblationConfig.preset(name)
                 model = MultiModalASTGTN(
-                    model_config=self._small_model_config(num_input_features=1),
+                    model_config=self._small_model_config(num_input_features=10),
                     text_config=text_config,
                     ablation=ablation,
                     num_industries=2,

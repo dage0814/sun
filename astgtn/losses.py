@@ -88,7 +88,7 @@ def temporal_mixup(
     *,
     return_permutation: bool = False,
 ):
-    """Mix complete temporal samples after multimodal encoding."""
+
 
     if alpha <= 0:
         result = (features, targets, targets, 1.0)

@@ -17,8 +17,8 @@ from .history import PointInTimePrior
 
 @dataclass
 class ModelOutput:
-    logits: torch.Tensor  # [B,Tpre,N,C]
-    adjacency: torch.Tensor  # [B,T,N,N]
+    logits: torch.Tensor
+    adjacency: torch.Tensor
     branches: Dict[str, torch.Tensor]
 
 
@@ -63,6 +63,8 @@ class AdaptiveSpatioTemporalGraphTransformer(nn.Module):
             raise ValueError(
                 f"Expected {self.config.num_stocks} stocks, got {features.shape[2]}"
             )
+        if features.shape[-1] != self.config.num_input_features:
+            raise ValueError("Unexpected backbone feature width")
         if features.shape[1] < self.config.pre_len:
             raise ValueError("pre_len cannot exceed the input sequence length")
 

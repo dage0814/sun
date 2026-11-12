@@ -14,17 +14,17 @@ _ISO_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
 )
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
-_MIN_TIMESTAMP = -62135596800  # 0001-01-01T00:00:00Z
-_MAX_TIMESTAMP = 253402300799  # 9999-12-31T23:59:59Z
+_MIN_TIMESTAMP = -62135596800
+_MAX_TIMESTAMP = 253402300799
 _OPEN_END = torch.iinfo(torch.int64).max
 
 
 def utc_seconds(value: str | datetime) -> int:
-    """Require timezone-aware timestamps at whole-second precision; reject dates, naive datetimes and numeric epochs."""
+
     if isinstance(value, str):
         if not _ISO_TIMESTAMP.fullmatch(value):
             raise ValueError("timestamp must be ISO 8601 with T, seconds and an explicit timezone")
-        # Reject sub-microsecond digits before datetime truncates them.
+
         fraction = re.search(r"\.(\d+)", value)
         if fraction is not None and any(digit != "0" for digit in fraction.group(1)):
             raise ValueError("timestamp must use whole seconds; do not round publication times")
@@ -56,11 +56,7 @@ def _canonical_timestamp(value: str | datetime) -> str:
 
 
 class PointInTimePrior(nn.Module):
-    """Events require relation_id, source, target, known_at, effective_at, source_available_at, source_ref and action (add/remove).
-    Weight defaults to 1; bidirectional defaults to True. Endpoints and direction are fixed per relation_id.
-    Contributions from separate IDs on the same edge are summed.
-    Activation time is max(known_at, effective_at, source_available_at). Later changes do not alter earlier graphs.
-    Output: row-normalized [B, T, N, N] adjacency."""
+
 
     def __init__(self, num_stocks: int, events: Sequence[Mapping[str, Any]]) -> None:
         super().__init__()
@@ -211,7 +207,7 @@ class PointInTimePrior(nn.Module):
                 + ", ".join(mismatches)
                 + ". Rebuild explicitly from verified events instead of replacing temporal buffers."
             )
-            return  # Failed loads must not mutate the graph.
+            return
         super()._load_from_state_dict(
             state_dict, prefix, local_metadata, strict,
             missing_keys, unexpected_keys, error_msgs,

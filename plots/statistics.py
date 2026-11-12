@@ -1,6 +1,3 @@
-"""CSV columns: figure, configuration, metric, mean, sd.
-Figure keys: gp, fusion, paths, models, efficiency, window, loss, ranking."""
-
 from __future__ import annotations
 
 import argparse
@@ -302,4 +299,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -1,6 +1,3 @@
-"""CSV columns: configuration, sparsity_percent, gradient_cv, mcc, auroc, mcc_sd, auroc_sd.
-The surface interpolates configuration means with IDW; error bars show the supplied standard deviations."""
-
 from __future__ import annotations
 
 import argparse
@@ -255,4 +252,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

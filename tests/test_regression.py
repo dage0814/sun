@@ -1,7 +1,6 @@
-"""Synthetic test fixtures."""
-
 import unittest
 from dataclasses import replace
+from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import torch
@@ -27,7 +26,7 @@ class RegressionTests(unittest.TestCase):
         )
         frame = pd.DataFrame(
             {"close": [100, 50, 60, 70, 80], "eps": 1.0,
-             "free_cash_flow": 1.0, "enterprise_value": 1.0, "ebitda": 1.0},
+             "free_cash_flow": 1.0, "market_cap": 10.0, "enterprise_value": 1.0, "ebitda": 1.0},
             index=index,
         )
         output = FinancialFactorBuilder(window=4).build(frame)
@@ -64,18 +63,33 @@ class RegressionTests(unittest.TestCase):
             encoder.score_head.bias.fill_(3.0)
         ids = torch.zeros(1, 1, 4, 3, dtype=torch.long)
         output = encoder(ids, ids)
-        self.assertEqual(output.industry_features.count_nonzero().item(), 0)
-        self.assertEqual(output.industry_scores.count_nonzero().item(), 0)
+        expected = torch.nn.functional.gelu(encoder.industry_bias).unsqueeze(0).unsqueeze(0)
+        torch.testing.assert_close(output.industry_features, expected)
+        torch.testing.assert_close(output.industry_scores, encoder.score_head(expected).squeeze(-1))
         self.assertEqual(output.news_attention.count_nonzero().item(), 0)
 
     def test_first_checkpoint(self):
-        model = nn.Linear(1, 1)
-        model.text_encoder = None
+        class CheckpointModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = nn.Parameter(torch.tensor(1.0))
+                self.text_encoder = None
+
+            def encode_features(self, quantitative):
+                return SimpleNamespace(features=quantitative)
+
+            def backbone(self, features, window_cutoffs=None):
+                value = features * self.weight
+                return SimpleNamespace(logits=torch.cat([value, -value], dim=-1))
+
+        model = CheckpointModel()
         trainer = TwoStageTrainer(
-            model, TrainingConfig(stage2_epochs=2), AblationConfig(), torch.device("cpu")
+            model, TrainingConfig(stage2_epochs=2),
+            AblationConfig.preset("no_mixup"), torch.device("cpu")
         )
         trainer.evaluate_mcc = lambda _: -1.0
-        history = trainer.fit_stage2([], [])
+        batch = {"quantitative": torch.ones(1, 1, 1, 1), "targets": torch.zeros(1, 1, 1, dtype=torch.long)}
+        history = trainer.fit_stage2([batch], [batch])
         self.assertEqual(history.best_epoch, 0)
         self.assertEqual(history.best_mcc, -1.0)
 

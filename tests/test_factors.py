@@ -44,6 +44,7 @@ class FactorTests(unittest.TestCase):
                 "close": np.linspace(10, 20, count),
                 "eps": np.full(count, 2.0),
                 "free_cash_flow": np.linspace(1, 2, count),
+                "market_cap": np.linspace(100, 200, count),
                 "enterprise_value": np.linspace(100, 120, count),
                 "ebitda": np.full(count, 10.0),
             },

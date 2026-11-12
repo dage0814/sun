@@ -1,5 +1,3 @@
-"""Usage: python train.py --data data/bundle.pt --ablation full"""
-
 from __future__ import annotations
 
 import argparse
@@ -48,7 +46,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_bundle(path: Path) -> dict:
+
     bundle = torch.load(path, map_location="cpu", weights_only=True)
+    if not isinstance(bundle, dict):
+        raise TypeError("The tensor bundle must be a dictionary")
     required = {
         "quantitative",
         "technical",
@@ -59,6 +60,9 @@ def load_bundle(path: Path) -> dict:
     missing = required.difference(bundle)
     if missing:
         raise KeyError(f"Bundle is missing required fields: {sorted(missing)}")
+    for name in required:
+        if not torch.is_tensor(bundle[name]):
+            raise TypeError(f"Bundle field {name!r} must be a tensor")
     return bundle
 
 
@@ -80,6 +84,21 @@ def main() -> None:
     window_cutoffs, prior_graph, temporal_report = validate_temporal_bundle(
         bundle, use_prior_graph=ablation.use_prior_graph, use_text=ablation.use_text
     )
+    float_fields = ("quantitative", "technical", "market_caps")
+    integer_fields = ("targets", "stock_industry")
+    if ablation.use_text:
+        float_fields += ("industry_relevance",)
+        integer_fields += ("input_ids", "attention_mask")
+    for name in float_fields:
+        if name in bundle:
+            bundle[name] = bundle[name].to(torch.float32)
+            if not torch.isfinite(bundle[name]).all():
+                raise ValueError(f"Bundle field {name!r} exceeds the finite float32 range")
+    for name in integer_fields:
+        if name in bundle:
+            bundle[name] = bundle[name].to(torch.long)
+    if ablation.use_text and "news_mask" in bundle:
+        bundle["news_mask"] = bundle["news_mask"].to(torch.bool)
     quantitative = bundle["quantitative"]
     technical = bundle["technical"]
     stocks = quantitative.shape[2]
@@ -90,7 +109,7 @@ def main() -> None:
     optional_data = {
         key: bundle[key]
         for key in ("input_ids", "attention_mask", "news_mask", "industry_relevance")
-        if key in bundle
+        if ablation.use_text and key in bundle
     }
     if ablation.use_text:
         missing_text = {"input_ids", "attention_mask"}.difference(optional_data)
@@ -118,7 +137,7 @@ def main() -> None:
 
     model_config = ModelConfig(
         num_stocks=stocks,
-        num_input_features=1,  # Set to the fused feature width by MultiModalASTGTN.
+        num_input_features=args.hidden_dim + technical.shape[-1],
         pre_len=pre_len,
         hidden_dim=args.hidden_dim,
         graph_heads=4,
