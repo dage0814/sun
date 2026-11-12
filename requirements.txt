@@ -1,9 +1,0 @@
-# Python 3.10 or later.
-torch>=2.0,<3
-numpy>=1.26,<3
-pandas>=2.2,<3
-transformers>=4.40,<5
-sentencepiece>=0.2
-tzdata
-matplotlib>=3.8,<4
-Pillow>=10
